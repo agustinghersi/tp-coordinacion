@@ -23,21 +23,25 @@ class AggregationFilter:
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
-        self.fruit_top = []
+        self.fruit_top = {} # va a ser cliente - fruit_item
 
-    def _process_data(self, fruit, amount):
+    def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
-        for i in range(len(self.fruit_top)):
-            if self.fruit_top[i].fruit == fruit:
-                self.fruit_top[i] = self.fruit_top[i] + fruit_item.FruitItem(
-                    fruit, amount
-                )
-                return
-        bisect.insort(self.fruit_top, fruit_item.FruitItem(fruit, amount))
+        # similar a sum, pero aca es cliente - fruit_item para mantener el orden
+        if client_id not in self.fruit_top:
+            self.fruit_top[client_id] = [fruit_item.FruitItem(fruit, amount)]
+        else:
+            for i in range(len(self.fruit_top[client_id])):
+                if self.fruit_top[client_id][i].fruit == fruit:
+                    self.fruit_top[client_id][i] = self.fruit_top[client_id][i] + fruit_item.FruitItem(
+                        fruit, amount
+                    )
+                    return
+        bisect.insort(self.fruit_top[client_id], fruit_item.FruitItem(fruit, amount))
 
-    def _process_eof(self):
+    def _process_eof(self, client_id):
         logging.info("Received EOF")
-        fruit_chunk = list(self.fruit_top[-TOP_SIZE:])
+        fruit_chunk = list(self.fruit_top[client_id][-TOP_SIZE:])
         fruit_chunk.reverse()
         fruit_top = list(
             map(
@@ -46,15 +50,15 @@ class AggregationFilter:
             )
         )
         self.output_queue.send(message_protocol.internal.serialize(fruit_top))
-        del self.fruit_top
+        del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
 
     def process_messsage(self, message, ack, nack):
         logging.info("Process message")
         fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 2:
+        if len(fields) == 3:
             self._process_data(*fields)
         else:
-            self._process_eof()
+            self._process_eof(*fields)
         ack()
 
     def start(self):
