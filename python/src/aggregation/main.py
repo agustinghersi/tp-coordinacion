@@ -50,7 +50,7 @@ class AggregationFilter:
                 fruit_chunk,
             )
         )
-        self.output_queue.send(message_protocol.internal.serialize(fruit_top))
+        self.output_queue.send(message_protocol.internal.serialize((client_id, fruit_top)))
         del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
 
     def process_messsage(self, message, ack, nack):
