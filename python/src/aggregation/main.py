@@ -29,8 +29,7 @@ class AggregationFilter:
         logging.info("Processing data message")
         # similar a sum, pero aca es cliente - fruit_item para mantener el orden
         if client_id not in self.fruit_top:
-            self.fruit_top[client_id] = [] # Creo la lista
-            self.fruit_top[client_id].append(fruit_item.FruitItem(fruit, amount)) # Agrego la fruta
+            self.fruit_top[client_id] = [] # Creo la lista de este client
         else:
             for i in range(len(self.fruit_top[client_id])):
                 if self.fruit_top[client_id][i].fruit == fruit:
