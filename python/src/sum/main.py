@@ -32,7 +32,7 @@ class SumFilter:
         if client_id not in self.amount_by_fruit:
             self.amount_by_fruit[client_id] = {}
         # Ahora la clave es id + fruta para distinguir entre clientes
-        self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit.get(
+        self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit[client_id].get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
 
