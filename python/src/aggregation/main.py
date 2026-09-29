@@ -24,6 +24,7 @@ class AggregationFilter:
             MOM_HOST, OUTPUT_QUEUE
         )
         self.fruit_top = {} # va a ser cliente - fruit_item
+        self.dict_eof = {} # cliente - cantidad de eofs recibidos. Debe llegar a SUM_AMOUNT
 
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
@@ -41,16 +42,25 @@ class AggregationFilter:
 
     def _process_eof(self, client_id):
         logging.info("Received EOF")
-        fruit_chunk = list(self.fruit_top[client_id][-TOP_SIZE:])
-        fruit_chunk.reverse()
-        fruit_top = list(
-            map(
-                lambda fruit_item: (fruit_item.fruit, fruit_item.amount),
-                fruit_chunk,
+
+        # Si recibi SUM_AMOUNT de este cliente mando a join. Sino solo sumo 1
+        if client_id not in self.dict_eof:
+            self.dict_eof[client_id] = 0
+        self.dict_eof[client_id] += 1
+
+        if self.dict_eof[client_id] == SUM_AMOUNT:
+            # La lista slo la armo al momento de mandar todo a join
+            fruit_chunk = list(self.fruit_top[client_id][-TOP_SIZE:])
+            fruit_chunk.reverse()
+            fruit_top = list(
+                map(
+                    lambda fruit_item: (fruit_item.fruit, fruit_item.amount),
+                    fruit_chunk,
+                )
             )
-        )
-        self.output_queue.send(message_protocol.internal.serialize((client_id, fruit_top)))
-        del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
+
+            self.output_queue.send(message_protocol.internal.serialize((client_id, fruit_top)))
+            del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
 
     def process_messsage(self, message, ack, nack):
         logging.info("Process message")
