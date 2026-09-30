@@ -44,9 +44,18 @@ class SumFilter:
         self.lock = threading.Lock()
         self.amount_by_fruit = {} # Va a ser de clientes - frutas y el value cantidad
 
+        self.count_by_client = {} # client - count de mensajes recibidos (para cordinacion)
+        self.count_cordination = {} # client - count pero guardo solo el n° de mensaje de un eof
+        # Solo guardo los clientes que en este sum soy cordinador (me llego el eof)
+
+        self.cordinators = {} # cliente - sum cordinador (detalles en el informe)
+
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
-
+        # Voy contando los mensajes por cliente para coordinar (mas detalle en el informe)
+        if not client_id in self.count_by_client:
+            self.count_by_client[client_id] = 0
+        self.count_by_client[client_id] += 1
         with self.lock:
             # Agrego al diccionario el cliente si no esta. Despues dentro del cliente iran sus frutas
             if client_id not in self.amount_by_fruit:
@@ -55,8 +64,12 @@ class SumFilter:
             self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit[client_id].get(
                 fruit, fruit_item.FruitItem(fruit, 0)
             ) + fruit_item.FruitItem(fruit, int(amount))
+        
+        if self.count_by_client[client_id] == 0: # Estaba en -1, faltaban mansajes por procesar
+            self.control_exchange[self.cordinators[client_id]].send(message_protocol.internal.serialize([client_id, 1]))
+            self.count_by_client[client_id] = -1 # para volver al mismo estado
 
-    def _process_eof(self, client_id):
+    def _process_eof(self, client_id, count):
         logging.info(f"Broadcasting data messages")
 
         with self.lock:
@@ -75,12 +88,29 @@ class SumFilter:
                 del self.amount_by_fruit[client_id]
 
         logging.info(f"Broadcasting EOF message")
-        # Broadcast (excepto a mi mismo) del EOF a cada sum
-        for node in self.control_exchange:
-            node.send(message_protocol.internal.serialize([client_id]))
-        # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
-        for data_output_exchange in self.data_output_exchanges:
-            data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+        self.count_cordination[client_id] = count
+        if not client_id in self.count_by_client:
+            count_cordinator = 0 # EOF fue el unico mensaje que me llego de este clietne
+            self.count_by_client[client_id] = 0
+        else:
+            count_cordinator = self.count_by_client[client_id] # agrego a este valor lo que recibi
+
+        if count_cordinator == count:
+            # Broadcast (excepto a mi mismo) del EOF a cada sum
+            for node in self.control_exchange:
+                node.send(message_protocol.internal.serialize([client_id]))
+            # Ya todos avisados de mandar al aggregation
+            del self.count_cordination[client_id]
+            del self.count_by_client[client_id]
+
+            # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
+            for data_output_exchange in self.data_output_exchanges:
+                data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+        else:
+            for node in self.control_exchange:
+                # El 0 no importa, es para cambiar la cantidad de parametros
+                # Aca pido que me diga cada sum cuantos mensajes del cliente llego para coordinar
+                node.send(message_protocol.internal.serialize([client_id, ID, 0]))
        
     def _process_control_work(self, client_id):
         with self.lock:
@@ -111,14 +141,51 @@ class SumFilter:
         fields = message_protocol.internal.deserialize(message)
         if len(fields) == 3: # 2 -> 3 por agregar ID
             self._process_data(*fields)
-        else:
+        else: # Pasa a ser 2 por mandar el count de mensajes
             self._process_eof(*fields)
         ack()
+
+    def _process_send_information(self, client_id, sum_id, count):
+        # El count recibido es 0 para tener un parametro mas, aca no me interesa ese valor
+        if ID < sum_id:
+            # Es asi porque no me guardo a mi mismo en la lista de sums para enviar por exchange un mensaje
+            sum_cordinator_to_send = sum_id - 1
+        else: # Necesariamente mayor, nunca va a ser igal
+            sum_cordinator_to_send = sum_id
+        # Envio la cant de mensajes de ese cliente recibidos por mi
+        if not client_id in self.count_by_client:
+            # Esto implica que este sum no trabajo sobre el cliente
+            self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, 0]))
+
+        else:
+            self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, self.count_by_client[client_id]]))
+        self.count_by_client[client_id] = -1 # Para distinguir de los que no enviaron
+        self.cordinators[client_id] = sum_cordinator_to_send # Por si me llega otro mensaje de ese cliente para avisarle
+
+    def _process_recive_feedback(self, client_id, count):
+        self.count_by_client[client_id] += count # Actualizo con lo que llega
+        if self.count_cordination[client_id] == self.count_by_client[client_id]:
+            # Broadcast (excepto a mi mismo) del EOF a cada sum
+            for node in self.control_exchange:
+                node.send(message_protocol.internal.serialize([client_id]))
+
+            # Ya todos avisados de mandar al aggregation
+            del self.count_cordination[client_id]
+            del self.count_by_client[client_id]
+
+            # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
+            for data_output_exchange in self.data_output_exchanges:
+                data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+
 
     def process_control_message(self, message, ack, nack):
         fields = message_protocol.internal.deserialize(message)
         if len(fields) == 1:
             self._process_control_work(*fields)
+        elif len(fields) == 2: # 2 -> client id y count del sum que manda
+            self._process_recive_feedback(*fields)
+        else: # 3 -> client id, sum id y count del sum que manda
+            self._process_send_information(*fields)
         ack()
 
     def start(self):
