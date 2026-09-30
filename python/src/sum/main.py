@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import zlib
 
 from common import middleware, message_protocol, fruit_item
 from threading import Thread, Lock
@@ -62,12 +63,14 @@ class SumFilter:
             # El if para evitar el caso de 1° mensaje de este client en este sum sea eof y rompa
             if client_id in self.amount_by_fruit:
                 for final_fruit_item in self.amount_by_fruit[client_id].values():
-                    for data_output_exchange in self.data_output_exchanges:
-                        data_output_exchange.send(
-                            message_protocol.internal.serialize(
-                                [client_id, final_fruit_item.fruit, final_fruit_item.amount]
-                            )
+                    # Envio el mensaje a solo 1 aggregator y me aseguro que sea entre 0 y aggregation_amount - 1
+                    # misma fruta va al mismo aggregator, asi no falla combinar tops mas adelante
+                    aggregator_to_send = zlib.crc32(final_fruit_item.fruit.encode()) % AGGREGATION_AMOUNT
+                    self.data_output_exchanges[aggregator_to_send].send(
+                        message_protocol.internal.serialize(
+                            [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                         )
+                    )
                 # Ya se envio todo a algun aggregator
                 del self.amount_by_fruit[client_id]
 
@@ -90,12 +93,14 @@ class SumFilter:
             
             # Llego el oef de otro sum, mando todo de ese cliente al aggregaor
             for final_fruit_item in self.amount_by_fruit[client_id].values():
-                for data_output_exchange in self.data_output_exchanges:
-                    data_output_exchange.send(
-                        message_protocol.internal.serialize(
-                            [client_id, final_fruit_item.fruit, final_fruit_item.amount]
-                        )
+                # Envio el mensaje a solo 1 aggregator y me aseguro que sea entre 0 y aggregation_amount - 1
+                # misma fruta va al mismo aggregator, asi no falla combinar tops mas adelante
+                aggregator_to_send = zlib.crc32(final_fruit_item.fruit.encode()) % AGGREGATION_AMOUNT
+                self.data_output_exchanges[aggregator_to_send].send(
+                    message_protocol.internal.serialize(
+                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                     )
+                )
             
             del self.amount_by_fruit[client_id] # Borro data de este cliente en este sum
             for data_output_exchange in self.data_output_exchanges:
