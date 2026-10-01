@@ -50,6 +50,8 @@ class SumFilter:
 
         self.cordinators = {} # cliente - sum cordinador (detalles en el informe)
 
+        self.send_lock = threading.Lock() # Por los problemas de threadsafe al enviar mensajes
+
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
         # Voy contando los mensajes por cliente para coordinar (mas detalle en el informe)
@@ -66,8 +68,9 @@ class SumFilter:
             ) + fruit_item.FruitItem(fruit, int(amount))
         
         if self.count_by_client[client_id] == 0: # Estaba en -1, faltaban mansajes por procesar
-            self.control_exchange[self.cordinators[client_id]].send(message_protocol.internal.serialize([client_id, 1]))
-            self.count_by_client[client_id] = -1 # para volver al mismo estado
+            with self.send_lock:
+                self.control_exchange[self.cordinators[client_id]].send(message_protocol.internal.serialize([client_id, 1]))
+                self.count_by_client[client_id] = -1 # para volver al mismo estado
 
     def _process_eof(self, client_id, count):
         logging.info(f"Broadcasting data messages")
@@ -79,11 +82,12 @@ class SumFilter:
                     # Envio el mensaje a solo 1 aggregator y me aseguro que sea entre 0 y aggregation_amount - 1
                     # misma fruta va al mismo aggregator, asi no falla combinar tops mas adelante
                     aggregator_to_send = zlib.crc32(final_fruit_item.fruit.encode()) % AGGREGATION_AMOUNT
-                    self.data_output_exchanges[aggregator_to_send].send(
-                        message_protocol.internal.serialize(
-                            [client_id, final_fruit_item.fruit, final_fruit_item.amount]
+                    with self.send_lock:
+                        self.data_output_exchanges[aggregator_to_send].send(
+                            message_protocol.internal.serialize(
+                                [client_id, final_fruit_item.fruit, final_fruit_item.amount]
+                            )
                         )
-                    )
                 # Ya se envio todo a algun aggregator
                 del self.amount_by_fruit[client_id]
 
@@ -97,44 +101,50 @@ class SumFilter:
 
         if count_cordinator == count:
             # Broadcast (excepto a mi mismo) del EOF a cada sum
-            for node in self.control_exchange:
-                node.send(message_protocol.internal.serialize([client_id]))
+            with self.send_lock:
+                for node in self.control_exchange:
+                    node.send(message_protocol.internal.serialize([client_id]))
             # Ya todos avisados de mandar al aggregation
             del self.count_cordination[client_id]
             del self.count_by_client[client_id]
 
             # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+            with self.send_lock:
+                for data_output_exchange in self.data_output_exchanges:
+                    data_output_exchange.send(message_protocol.internal.serialize([client_id]))
         else:
-            for node in self.control_exchange:
-                # El 0 no importa, es para cambiar la cantidad de parametros
-                # Aca pido que me diga cada sum cuantos mensajes del cliente llego para coordinar
-                node.send(message_protocol.internal.serialize([client_id, ID, 0]))
+            with self.send_lock:
+                for node in self.control_exchange:
+                    # El 0 no importa, es para cambiar la cantidad de parametros
+                    # Aca pido que me diga cada sum cuantos mensajes del cliente llego para coordinar
+                    node.send(message_protocol.internal.serialize([client_id, ID, 0]))
        
     def _process_control_work(self, client_id):
         with self.lock:
             if client_id not in self.amount_by_fruit:
                 # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente
-                for data_output_exchange in self.data_output_exchanges:
-                    data_output_exchange.send(message_protocol.internal.serialize([client_id]))
-                return # Indica que yo hice el broadcast de este cliente
-                # ya envie todo a aggregatory elimine los datos de este cliente
+                with self.send_lock:
+                    for data_output_exchange in self.data_output_exchanges:
+                        data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+                    return # Indica que yo hice el broadcast de este cliente
+                    # ya envie todo a aggregatory elimine los datos de este cliente
             
             # Llego el oef de otro sum, mando todo de ese cliente al aggregaor
             for final_fruit_item in self.amount_by_fruit[client_id].values():
                 # Envio el mensaje a solo 1 aggregator y me aseguro que sea entre 0 y aggregation_amount - 1
                 # misma fruta va al mismo aggregator, asi no falla combinar tops mas adelante
                 aggregator_to_send = zlib.crc32(final_fruit_item.fruit.encode()) % AGGREGATION_AMOUNT
-                self.data_output_exchanges[aggregator_to_send].send(
-                    message_protocol.internal.serialize(
-                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
+                with self.send_lock:
+                    self.data_output_exchanges[aggregator_to_send].send(
+                        message_protocol.internal.serialize(
+                            [client_id, final_fruit_item.fruit, final_fruit_item.amount]
+                        )
                     )
-                )
             
             del self.amount_by_fruit[client_id] # Borro data de este cliente en este sum
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(message_protocol.internal.serialize([client_id])) # Para sumar 1 en aggregator
+            with self.send_lock:
+                for data_output_exchange in self.data_output_exchanges:
+                    data_output_exchange.send(message_protocol.internal.serialize([client_id])) # Para sumar 1 en aggregator
 
 
     def process_data_message(self, message, ack, nack):
@@ -154,11 +164,13 @@ class SumFilter:
             sum_cordinator_to_send = sum_id
         # Envio la cant de mensajes de ese cliente recibidos por mi
         if not client_id in self.count_by_client:
-            # Esto implica que este sum no trabajo sobre el cliente
-            self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, 0]))
+            with self.send_lock:
+                # Esto implica que este sum no trabajo sobre el cliente
+                self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, 0]))
 
         else:
-            self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, self.count_by_client[client_id]]))
+            with self.send_lock:
+                self.control_exchange[sum_cordinator_to_send].send(message_protocol.internal.serialize([client_id, self.count_by_client[client_id]]))
         self.count_by_client[client_id] = -1 # Para distinguir de los que no enviaron
         self.cordinators[client_id] = sum_cordinator_to_send # Por si me llega otro mensaje de ese cliente para avisarle
 
@@ -166,16 +178,18 @@ class SumFilter:
         self.count_by_client[client_id] += count # Actualizo con lo que llega
         if self.count_cordination[client_id] == self.count_by_client[client_id]:
             # Broadcast (excepto a mi mismo) del EOF a cada sum
-            for node in self.control_exchange:
-                node.send(message_protocol.internal.serialize([client_id]))
+            with self.send_lock:
+                for node in self.control_exchange:
+                    node.send(message_protocol.internal.serialize([client_id]))
 
             # Ya todos avisados de mandar al aggregation
             del self.count_cordination[client_id]
             del self.count_by_client[client_id]
 
-            # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+            with self.send_lock:
+                # Mensaje a cada aggregator indicando que ya tiene todo lo de este cliente de este sum
+                for data_output_exchange in self.data_output_exchanges:
+                    data_output_exchange.send(message_protocol.internal.serialize([client_id]))
 
 
     def process_control_message(self, message, ack, nack):

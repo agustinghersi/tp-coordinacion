@@ -49,9 +49,10 @@ class AggregationFilter:
         self.dict_eof[client_id] += 1
 
         if self.dict_eof[client_id] == SUM_AMOUNT:
-            # La lista slo la armo al momento de mandar todo a join
-            self.fruit_top[client_id].sort(key=lambda x: x.amount) #Ordeno
-            fruit_chunk = list(self.fruit_top[client_id][-TOP_SIZE:])
+            # La lista solo la armo al momento de mandar todo a join
+            fruits_client = self.fruit_top.get(client_id, [])
+            sorted_list = sorted(fruits_client)
+            fruit_chunk = list(sorted_list[-TOP_SIZE:])
             fruit_chunk.reverse()
             fruit_top = list(
                 map(
