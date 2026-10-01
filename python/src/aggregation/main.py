@@ -63,7 +63,8 @@ class AggregationFilter:
             )
 
             self.output_queue.send(message_protocol.internal.serialize((client_id, fruit_top)))
-            del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
+            if client_id in self.fruit_top: # No hago el del si solo me llego el EOF
+                del self.fruit_top[client_id] # Solo al cliente terminado se lo elimina
 
     def process_messsage(self, message, ack, nack):
         logging.info("Process message")
