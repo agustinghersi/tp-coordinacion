@@ -1,6 +1,7 @@
 import os
 import logging
 import bisect
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -73,8 +74,16 @@ class AggregationFilter:
             self._process_eof(*fields)
         ack()
 
+    def handle_sigterm(self, signum, frame):
+        # Aca no necesito threadsafe porque es un hilo solo
+        self.input_exchange.stop_consuming()
+
     def start(self):
+        signal.signal(signal.SIGTERM, self.handle_sigterm)
         self.input_exchange.start_consuming(self.process_messsage)
+
+        self.input_exchange.close()
+        self.output_queue.close()
 
 
 def main():

@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import zlib
+import signal
 
 from common import middleware, message_protocol, fruit_item
 from threading import Thread, Lock
@@ -52,6 +53,12 @@ class SumFilter:
 
         self.send_lock = threading.Lock() # Por los problemas de threadsafe al enviar mensajes
 
+    def handle_sigterm(self, signum, frame):
+        # Vi que podia hacer esto de forma segura en un hilo de consultas del campus
+        self.control_message.connection.add_callback_threadsafe(self.control_message.stop_consuming)
+        self.input_queue.connection.add_callback_threadsafe(self.input_queue.stop_consuming)
+
+    
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
         # Voy contando los mensajes por cliente para coordinar (mas detalle en el informe)
@@ -203,8 +210,24 @@ class SumFilter:
         ack()
 
     def start(self):
-        Thread(target=self.control_message.start_consuming, args=(self.process_control_message,)).start()
-        Thread(target=self.input_queue.start_consuming, args=(self.process_data_message,)).start()
+        signal.signal(signal.SIGTERM, self.handle_sigterm)
+
+        thread_1 = Thread(target=self.control_message.start_consuming, args=(self.process_control_message,))
+        thread_2 = Thread(target=self.input_queue.start_consuming, args=(self.process_data_message,))
+        
+        thread_1.start()
+        thread_2.start()
+        thread_1.join()
+        thread_2.join()
+
+        # Cierro todo
+        self.control_message.close()
+        self.input_queue.close()
+        for conexion in self.control_exchange:
+            conexion.close()
+        for conexion in self.data_output_exchanges:
+            conexion.close()
+
 
 def main():
     logging.basicConfig(level=logging.INFO)
